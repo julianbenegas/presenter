@@ -1,5 +1,10 @@
 @import "tailwindcss";
 
+/* Base background colors - full black in dark mode */
+body {
+  @apply bg-white dark:bg-black text-gray-900 dark:text-gray-100;
+}
+
 /* CodeMirror full height styling */
 .editor {
   height: 100%;
@@ -7,8 +12,114 @@
 
 .editor .cm-editor {
   height: 100%;
+  @apply bg-white dark:bg-black;
+}
+
+.editor .cm-editor .cm-gutters {
+  @apply bg-white dark:bg-black border-r border-gray-200 dark:border-gray-800;
+}
+
+.editor .cm-editor .cm-activeLineGutter {
+  @apply bg-gray-100 dark:bg-gray-900;
+}
+
+.editor .cm-editor .cm-activeLine {
+  @apply bg-gray-50 dark:bg-gray-900;
 }
 
 .editor .cm-scroller {
   overflow: auto;
+}
+
+/* Fix CodeMirror cursor and selection in dark mode */
+.dark .cm-editor .cm-cursor {
+  border-left-color: white !important;
+}
+
+.dark .cm-editor .cm-selectionBackground {
+  background-color: rgba(255, 255, 255, 0.15) !important;
+}
+
+.dark .cm-editor {
+  color: #e5e7eb;
+}
+
+/* CodeMirror Syntax Highlighting - Custom Markdown Theme */
+.cm-editor .cm-line {
+  line-height: 1.6;
+}
+
+/* Headings */
+.cm-editor .cm-heading-1 {
+  color: #e06c75;
+  font-weight: bold;
+  font-size: 1.5em;
+  line-height: 1.4;
+}
+
+.cm-editor .cm-heading-2 {
+  color: #e06c75;
+  font-weight: bold;
+  font-size: 1.3em;
+  line-height: 1.4;
+}
+
+.cm-editor .cm-heading-3 {
+  color: #e06c75;
+  font-weight: bold;
+  font-size: 1.1em;
+  line-height: 1.4;
+}
+
+.cm-editor .cm-heading {
+  color: #e06c75;
+  font-weight: bold;
+}
+
+/* Emphasis and strong */
+.cm-editor .cm-emphasis {
+  color: #c678dd;
+  font-style: italic;
+}
+
+.cm-editor .cm-strong {
+  color: #e5c07b;
+  font-weight: bold;
+}
+
+/* Links */
+.cm-editor .cm-link {
+  color: #61afef;
+  text-decoration: underline;
+}
+
+.cm-editor .cm-url {
+  color: #61afef;
+  text-decoration: underline;
+}
+
+/* Code */
+.cm-editor .cm-monospace {
+  color: #98c379;
+  background-color: #2c323c;
+  padding: 0.125rem 0.25rem;
+  border-radius: 0.25rem;
+  font-family: "Courier New", monospace;
+}
+
+/* Lists */
+.cm-editor .cm-list {
+  color: #61afef;
+}
+
+/* Quotes */
+.cm-editor .cm-quote {
+  color: #5c6370;
+  font-style: italic;
+}
+
+/* Strikethrough */
+.cm-editor .cm-strikethrough {
+  text-decoration: line-through;
+  color: #5c6370;
 }

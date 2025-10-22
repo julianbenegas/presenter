@@ -5,11 +5,9 @@ import { EditorView, keymap } from "@codemirror/view";
 import { EditorState } from "@codemirror/state";
 import { basicSetup } from "codemirror";
 import { markdown } from "@codemirror/lang-markdown";
-import { oneDark } from "@codemirror/theme-one-dark";
 import { defaultKeymap, indentWithTab } from "@codemirror/commands";
 import {
   syntaxHighlighting,
-  defaultHighlightStyle,
   indentUnit,
   HighlightStyle,
 } from "@codemirror/language";
@@ -18,13 +16,31 @@ import { tags } from "@lezer/highlight";
 interface EditorProps {
   value: string;
   onChange: (value: string) => void;
+  onMediaPaste?: (
+    file: File,
+    insertMarkdown: (markdown: string) => void
+  ) => void;
   className?: string;
 }
 
-export function Editor({ value, onChange, className = "" }: EditorProps) {
+export function Editor({
+  value,
+  onChange,
+  onMediaPaste,
+  className = "",
+}: EditorProps) {
   const editorRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const isInitialMount = useRef(true);
+
+  // Helper to insert markdown at current cursor position
+  const insertMarkdownAtCursor = (view: EditorView, markdown: string) => {
+    const { from } = view.state.selection.main;
+    view.dispatch({
+      changes: { from, insert: markdown },
+      selection: { anchor: from + markdown.length },
+    });
+  };
 
   useEffect(() => {
     if (!editorRef.current) return;
@@ -33,38 +49,94 @@ export function Editor({ value, onChange, className = "" }: EditorProps) {
     const markdownHighlighting = HighlightStyle.define([
       {
         tag: tags.heading1,
-        color: "#e06c75",
-        fontWeight: "bold",
-        fontSize: "1.5em",
+        class: "cm-heading-1",
       },
       {
         tag: tags.heading2,
-        color: "#e06c75",
-        fontWeight: "bold",
-        fontSize: "1.3em",
+        class: "cm-heading-2",
       },
       {
         tag: tags.heading3,
-        color: "#e06c75",
-        fontWeight: "bold",
-        fontSize: "1.1em",
+        class: "cm-heading-3",
       },
-      { tag: tags.heading, color: "#e06c75", fontWeight: "bold" },
-      { tag: tags.emphasis, color: "#c678dd", fontStyle: "italic" },
-      { tag: tags.strong, color: "#e5c07b", fontWeight: "bold" },
-      { tag: tags.link, color: "#61afef", textDecoration: "underline" },
-      { tag: tags.monospace, color: "#98c379", backgroundColor: "#2c323c" },
-      { tag: tags.list, color: "#61afef" },
-      { tag: tags.quote, color: "#5c6370", fontStyle: "italic" },
+      { tag: tags.heading, class: "cm-heading" },
+      { tag: tags.emphasis, class: "cm-emphasis" },
+      { tag: tags.strong, class: "cm-strong" },
+      { tag: tags.link, class: "cm-link" },
+      { tag: tags.monospace, class: "cm-monospace" },
+      { tag: tags.list, class: "cm-list" },
+      { tag: tags.quote, class: "cm-quote" },
+      { tag: tags.strikethrough, class: "cm-strikethrough" },
+      { tag: tags.url, class: "cm-url" },
     ]);
+
+    // Handle paste events for images and videos
+    const pasteHandler = EditorView.domEventHandlers({
+      paste(event, view) {
+        const items = event.clipboardData?.items;
+        if (!items) return false;
+
+        for (let i = 0; i < items.length; i++) {
+          const item = items[i];
+          if (
+            item.type.startsWith("image/") ||
+            item.type.startsWith("video/")
+          ) {
+            event.preventDefault();
+            const file = item.getAsFile();
+            if (file && onMediaPaste) {
+              onMediaPaste(file, (markdown) =>
+                insertMarkdownAtCursor(view, markdown)
+              );
+            }
+            return true;
+          }
+        }
+        return false;
+      },
+      drop(event, view) {
+        const files = event.dataTransfer?.files;
+        if (!files || files.length === 0) return false;
+
+        // Check if any of the files are images or videos
+        for (let i = 0; i < files.length; i++) {
+          const file = files[i];
+          if (
+            file.type.startsWith("image/") ||
+            file.type.startsWith("video/")
+          ) {
+            event.preventDefault();
+
+            // Get the drop position
+            const pos = view.posAtCoords({
+              x: event.clientX,
+              y: event.clientY,
+            });
+            if (pos !== null) {
+              // Move cursor to drop position
+              view.dispatch({
+                selection: { anchor: pos },
+              });
+            }
+
+            if (onMediaPaste) {
+              onMediaPaste(file, (markdown) =>
+                insertMarkdownAtCursor(view, markdown)
+              );
+            }
+            return true;
+          }
+        }
+        return false;
+      },
+    });
 
     const startState = EditorState.create({
       doc: value,
       extensions: [
         basicSetup,
         markdown(),
-        oneDark,
-        syntaxHighlighting(markdownHighlighting),
+        syntaxHighlighting(markdownHighlighting, { fallback: false }),
         keymap.of([...defaultKeymap, indentWithTab]),
         EditorView.updateListener.of((update) => {
           if (update.docChanged) {
@@ -81,9 +153,9 @@ export function Editor({ value, onChange, className = "" }: EditorProps) {
           "&": { height: "100%" },
           ".cm-scroller": { overflow: "auto" },
         }),
-        // Configure indentation to use 1 tab character
         EditorState.tabSize.of(4),
         indentUnit.of("\t"),
+        pasteHandler,
       ],
     });
 

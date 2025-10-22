@@ -14,25 +14,52 @@ export function splitSlides(content: string): string[] {
  * Extract presenter notes from a slide.
  * Based on iA Presenter rules:
  * - Headlines (starting with #) are always visible
+ * - Images (lines starting with !) are always visible
+ * - Videos (lines starting with <video) are always visible
+ * - Code blocks (``` ... ```) are always visible
  * - Body text without tabs is notes (not visible to audience)
- * - Text with tabs (⇥) at the start is visible to audience
+ * - Text with tabs (⇥) or 2+ spaces at the start is visible to audience
  */
 export function extractPresenterNotes(slide: string): ParsedSlide {
   const lines = slide.split("\n");
   const visibleLines: string[] = [];
   const noteLines: string[] = [];
+  let inCodeBlock = false;
 
   for (const line of lines) {
+    const trimmedLine = line.trim();
+
+    // Check for code block fence
+    if (trimmedLine.startsWith("```")) {
+      inCodeBlock = !inCodeBlock;
+      visibleLines.push(line);
+      continue;
+    }
+
+    // If inside code block, always add to visible
+    if (inCodeBlock) {
+      visibleLines.push(line);
+      continue;
+    }
+
     // Headlines are always visible
-    if (line.trim().startsWith("#")) {
+    if (trimmedLine.startsWith("#")) {
       visibleLines.push(line);
     }
-    // Lines starting with tab or spaces (4+) are visible
-    else if (line.startsWith("\t") || line.startsWith("    ")) {
-      visibleLines.push(line.replace(/^\t|^    /, ""));
+    // Images are always visible (regardless of indentation)
+    else if (trimmedLine.startsWith("!")) {
+      visibleLines.push(line);
+    }
+    // Videos are always visible (regardless of indentation)
+    else if (trimmedLine.startsWith("<video")) {
+      visibleLines.push(line);
+    }
+    // Lines starting with tab or 2+ spaces are visible
+    else if (line.startsWith("\t") || line.startsWith("  ")) {
+      visibleLines.push(line.replace(/^\t|^  /, ""));
     }
     // Everything else is presenter notes
-    else if (line.trim().length > 0) {
+    else if (trimmedLine.length > 0) {
       noteLines.push(line);
     }
     // Preserve empty lines in their respective sections

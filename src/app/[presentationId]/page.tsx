@@ -14,7 +14,11 @@ import {
   getChat,
   saveChat,
 } from "@/lib/storage";
-import { splitSlides, extractPresenterNotes } from "@/lib/markdown";
+import {
+  splitSlides,
+  extractPresenterNotes,
+  extractTitle,
+} from "@/lib/markdown";
 import { createBroadcastChannel, broadcastSlideChange } from "@/lib/broadcast";
 import { VerticalResizeHandle } from "@/components/VerticalResizeHandle";
 
@@ -227,21 +231,131 @@ export default function PresentationPage({
     setViewMode("present");
   };
 
+  // Keyboard shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Cmd+P (Mac) or Ctrl+P (Windows/Linux) to present
+      if ((e.metaKey || e.ctrlKey) && e.key === "p") {
+        e.preventDefault();
+        if (viewMode === "present") {
+          setViewMode("side-by-side");
+        } else {
+          handlePresentClick();
+        }
+        return;
+      }
+
+      // Only handle these shortcuts in present mode
+      if (viewMode !== "present") return;
+
+      switch (e.key) {
+        case "ArrowLeft":
+          e.preventDefault();
+          handlePrevSlide();
+          break;
+        case "ArrowRight":
+          e.preventDefault();
+          handleNextSlide();
+          break;
+        case "Escape":
+          e.preventDefault();
+          setViewMode("side-by-side");
+          break;
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [viewMode, currentSlideIndex, slides.length]);
+
+  // Handle media (image/video) paste/drop
+  const handleMediaPaste = useCallback(
+    async (file: File, insertMarkdown: (markdown: string) => void) => {
+      const isVideo = file.type.startsWith("video/");
+
+      // Insert temporary markdown with placeholder
+      const placeholderId = `uploading-${Date.now()}`;
+      const placeholderMarkdown = isVideo
+        ? `<video src="${placeholderId}" controls>Uploading ${file.name}...</video>`
+        : `![Uploading ${file.name}...](${placeholderId})`;
+      insertMarkdown(placeholderMarkdown);
+
+      try {
+        // Upload media to server
+        const formData = new FormData();
+        formData.append("file", file);
+
+        const response = await fetch("/api/upload", {
+          method: "POST",
+          body: formData,
+        });
+
+        if (!response.ok) {
+          throw new Error("Upload failed");
+        }
+
+        const { url, type } = await response.json();
+
+        // Replace placeholder with actual URL in content
+        setContent((prevContent) => {
+          const finalMarkdown =
+            type === "video"
+              ? `<video src="${url}" controls></video>`
+              : `![${file.name}](${url})`;
+
+          const newContent = prevContent.replace(
+            placeholderMarkdown,
+            finalMarkdown
+          );
+
+          // Save updated content
+          savePresentation({
+            id: presentationId,
+            title: extractTitle(newContent),
+            content: newContent,
+            updatedAt: Date.now(),
+          });
+
+          // Defer event dispatch to avoid updating during render
+          setTimeout(() => {
+            window.dispatchEvent(new Event("presentations-updated"));
+          }, 0);
+
+          return newContent;
+        });
+      } catch (error) {
+        console.error("Error uploading media:", error);
+        // Replace placeholder with error message
+        setContent((prevContent) =>
+          prevContent.replace(
+            placeholderMarkdown,
+            isVideo
+              ? `<video>Failed to upload ${file.name}</video>`
+              : `![Failed to upload ${file.name}](error)`
+          )
+        );
+      }
+    },
+    [presentationId]
+  );
+
   return (
     <div className="flex h-screen">
       <Sidebar />
 
       <div className="flex-1 flex flex-col">
         {/* View mode toggle */}
-        <div className="border-b border-gray-200 p-4 flex items-center justify-between">
+        <div className="border-b border-gray-200 dark:border-gray-800 p-4 flex items-center justify-between">
           {viewMode === "present" ? (
             <>
-              <div className="text-sm text-gray-600">
+              <div className="text-sm text-gray-600 dark:text-gray-400 dark:text-gray-600">
                 Slide {currentSlideIndex + 1} of {slides.length}
               </div>
               <button
                 onClick={() => setViewMode("side-by-side")}
-                className="flex items-center gap-2 px-4 py-2 rounded bg-gray-100 hover:bg-gray-200 cursor-pointer"
+                className="flex items-center gap-2 px-4 py-2 rounded bg-gray-100 dark:bg-gray-900 hover:bg-gray-200 dark:hover:bg-gray-800 cursor-pointer"
               >
                 <X size={16} />
                 Exit Present
@@ -252,7 +366,7 @@ export default function PresentationPage({
               <div></div>
               <button
                 onClick={handlePresentClick}
-                className="flex items-center gap-2 px-4 py-2 rounded bg-black text-white hover:bg-gray-800 cursor-pointer"
+                className="flex items-center gap-2 px-4 py-2 rounded bg-black dark:bg-white text-white dark:text-black hover:bg-gray-800 dark:hover:bg-gray-200 cursor-pointer"
               >
                 <Play size={16} />
                 Present
@@ -265,10 +379,11 @@ export default function PresentationPage({
         <div className="flex-1 overflow-hidden flex">
           {viewMode === "side-by-side" && (
             <>
-              <div className="flex-1 overflow-auto border-r border-gray-200">
+              <div className="flex-1 overflow-auto border-r border-gray-200 dark:border-gray-800">
                 <Editor
                   value={content}
                   onChange={handleContentChange}
+                  onMediaPaste={handleMediaPaste}
                   className="h-full"
                 />
               </div>
@@ -280,7 +395,7 @@ export default function PresentationPage({
                       return (
                         <div
                           key={index}
-                          className="border border-gray-200 p-8 rounded-lg aspect-video flex items-center justify-center"
+                          className="border border-gray-200 dark:border-gray-800 p-8 rounded-lg aspect-video flex items-center justify-center"
                         >
                           <SlideView content={visible} />
                         </div>
@@ -288,7 +403,7 @@ export default function PresentationPage({
                     })}
                   </div>
                 ) : (
-                  <div className="text-gray-400 text-center mt-8">
+                  <div className="text-gray-400 dark:text-gray-600 text-center mt-8">
                     No slides yet
                   </div>
                 )}
@@ -299,32 +414,34 @@ export default function PresentationPage({
           {viewMode === "present" && (
             <div className="flex-1 flex flex-col">
               {/* Slide display */}
-              <div className="flex-1 flex items-center justify-center p-8 bg-gray-50">
-                <div className="w-full max-w-4xl aspect-video border border-gray-200 rounded-lg bg-white p-12 flex items-center justify-center">
+              <div className="flex-1 flex items-center justify-center p-8 bg-gray-50 dark:bg-gray-900">
+                <div className="w-full max-w-4xl aspect-video border border-gray-200 dark:border-gray-800 rounded-lg bg-white dark:bg-black p-12 flex items-center justify-center">
                   {currentSlideVisible ? (
                     <SlideView content={currentSlideVisible} />
                   ) : (
-                    <div className="text-gray-400">No content</div>
+                    <div className="text-gray-400 dark:text-gray-600">
+                      No content
+                    </div>
                   )}
                 </div>
               </div>
 
               {/* Controls */}
-              <div className="border-t border-gray-200 p-4 flex items-center justify-center gap-4">
+              <div className="border-t border-gray-200 dark:border-gray-800 p-4 flex items-center justify-center gap-4">
                 <button
                   onClick={handlePrevSlide}
                   disabled={currentSlideIndex === 0}
-                  className="px-6 py-2 bg-black text-white rounded hover:bg-gray-800 disabled:bg-gray-300 disabled:cursor-not-allowed"
+                  className="px-6 py-2 bg-black text-white rounded hover:bg-gray-800 disabled:bg-gray-300 dark:disabled:bg-gray-800 disabled:text-gray-500 dark:disabled:text-gray-500 disabled:cursor-not-allowed"
                 >
                   Previous
                 </button>
-                <span className="text-sm text-gray-600">
+                <span className="text-sm text-gray-600 dark:text-gray-400 dark:text-gray-600">
                   {currentSlideIndex + 1} / {slides.length}
                 </span>
                 <button
                   onClick={handleNextSlide}
                   disabled={currentSlideIndex === slides.length - 1}
-                  className="px-6 py-2 bg-black text-white rounded hover:bg-gray-800 disabled:bg-gray-300 disabled:cursor-not-allowed"
+                  className="px-6 py-2 bg-black text-white rounded hover:bg-gray-800 disabled:bg-gray-300 dark:disabled:bg-gray-800 disabled:text-gray-500 dark:disabled:text-gray-500 disabled:cursor-not-allowed"
                 >
                   Next
                 </button>
@@ -337,7 +454,7 @@ export default function PresentationPage({
                 maxHeight={MAX_NOTES_HEIGHT}
               />
               <div
-                className="border-t border-gray-200 p-4 overflow-y-auto bg-gray-50"
+                className="border-t border-gray-200 dark:border-gray-800 p-4 overflow-y-auto bg-gray-50 dark:bg-gray-900"
                 style={{ height: `${notesHeight}px` }}
               >
                 <div className="text-sm font-bold mb-2">Presenter Notes:</div>

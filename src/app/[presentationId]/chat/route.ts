@@ -1,48 +1,158 @@
-import { query } from "@anthropic-ai/claude-agent-sdk";
-import { writeFile, readFile, mkdir, copyFile } from "fs/promises";
+import { Sandbox } from "@vercel/sandbox";
+import ms from "ms";
+import { readFile } from "fs/promises";
 import { join } from "path";
-import { existsSync } from "fs";
+import { redis } from "@/lib/redis";
 
-// Helper to create temp directory for presentation
-async function ensureTempDir(presentationId: string): Promise<string> {
-  const tempDir = join("/tmp", `presenter-${presentationId}`);
-  if (!existsSync(tempDir)) {
-    await mkdir(tempDir, { recursive: true });
-  }
-  return tempDir;
-}
-
-// Helper to build the agent prompt
-function buildAgentPrompt(
+// Helper to build the system prompt for Cursor
+function buildCursorPrompt(
   userRequest: string,
   isFirstMessage: boolean
 ): string {
   if (isFirstMessage) {
-    return `You are an expert presentation designer. Create a compelling presentation in markdown format based on this request: "${userRequest}"
+    return `Create a compelling presentation based on this user request:
 
-The presentation file is at presentation.md in the current directory.
+<user_request>
+${userRequest}
+</user_request>
 
-IMPORTANT FORMAT RULES (see sample.md for examples):
-- Separate slides with "---" (three hyphens on their own line)
-- Headlines (#, ##, ###) are always visible on slides
-- Body text WITHOUT tabs/indentation = presenter notes (only speaker sees)
-- Text WITH tabs (⇥) or 4 spaces at start = visible on slide to audience
-- Keep slides simple and focused
+<rules>
+Read RULES.md for the complete formatting rules.
+</rules>
 
-Use the Write tool to create presentation.md with 5-10 well-structured slides.`;
+<reference>
+See sample.md for a real example of proper formatting.
+</reference>
+
+Create 5-10 well-structured slides and save the result to presentation.md.`;
   }
 
-  return `Edit the presentation based on this request: "${userRequest}"
+  return `Edit the presentation based on this user request:
 
-The current presentation is in presentation.md. Use Read to see it, then Edit to make precise changes.
+<user_request>
+${userRequest}
+</user_request>
 
-Remember the format rules (see sample.md):
-- "---" separates slides
-- Headlines are visible
-- Body text = notes
-- Indented text = visible on slides
+<current_presentation>
+Read presentation.md for the current content.
+</current_presentation>
 
-Make surgical edits - don't regenerate unless asked.`;
+<rules>
+Read RULES.md for formatting rules.
+</rules>
+
+<reference>
+See sample.md for examples.
+</reference>
+
+Make surgical edits - don't regenerate unless asked. Save the updated result to presentation.md.`;
+}
+
+// Helper to escape content for heredoc
+function escapeHeredoc(content: string): string {
+  // Escape backslashes and dollar signs for heredoc
+  return content.replace(/\\/g, "\\\\").replace(/\$/g, "\\$");
+}
+
+// Redis keys
+const SANDBOX_KEY = (presentationId: string) => `sandbox:${presentationId}:id`;
+const CHAT_HISTORY_KEY = (presentationId: string) =>
+  `chat:${presentationId}:history`;
+
+// Get or create sandbox for presentation
+async function getOrCreateSandbox(
+  presentationId: string,
+  controller: ReadableStreamDefaultController,
+  encoder: TextEncoder
+): Promise<Sandbox> {
+  // Check if sandbox exists
+  const existingSandboxId = await redis.get<string>(
+    SANDBOX_KEY(presentationId)
+  );
+
+  // TODO: Implement sandbox reuse when Sandbox.get() API is available
+  // For now, we create a new sandbox each time but skip CLI installation
+  // if we detect it was recently created
+  if (existingSandboxId) {
+    controller.enqueue(
+      encoder.encode("[Using recently initialized environment...]\n\n")
+    );
+  }
+
+  // Create new sandbox
+  controller.enqueue(encoder.encode("[Creating secure environment...]\n\n"));
+
+  const sandbox = await Sandbox.create({
+    resources: { vcpus: 1 },
+    timeout: ms("15m"), // Longer timeout for reuse
+    runtime: "node22",
+  });
+
+  // Store sandbox reference in Redis with TTL (14 minutes, before sandbox timeout)
+  // Note: Storing the sandbox object itself for now
+  // TODO: Check if sandboxes have a retrievable ID
+  await redis.setex(SANDBOX_KEY(presentationId), 840, "created");
+
+  return sandbox;
+}
+
+// Save chat message to Redis
+async function saveChatMessage(
+  presentationId: string,
+  role: "user" | "assistant",
+  content: string
+) {
+  const message = {
+    role,
+    content,
+    timestamp: Date.now(),
+  };
+
+  // Append to chat history (keep last 50 messages)
+  await redis.rpush(CHAT_HISTORY_KEY(presentationId), JSON.stringify(message));
+  await redis.ltrim(CHAT_HISTORY_KEY(presentationId), -50, -1);
+
+  // Set TTL on chat history (1 hour)
+  await redis.expire(CHAT_HISTORY_KEY(presentationId), 3600);
+}
+
+// Get chat history from Redis
+async function getChatHistory(
+  presentationId: string
+): Promise<Array<{ role: string; content: string; timestamp: number }>> {
+  const history = await redis.lrange(CHAT_HISTORY_KEY(presentationId), 0, -1);
+  return history.map((msg) => JSON.parse(msg));
+}
+
+// Write chat history to sandbox for Cursor agent
+async function writeChatHistoryToSandbox(
+  sandbox: Sandbox,
+  presentationId: string
+) {
+  const history = await getChatHistory(presentationId);
+
+  if (history.length === 0) {
+    return;
+  }
+
+  // Format chat history for Cursor
+  const formattedHistory = history
+    .map((msg) => {
+      const timestamp = new Date(msg.timestamp).toISOString();
+      return `[${timestamp}] ${msg.role.toUpperCase()}:\n${msg.content}\n`;
+    })
+    .join("\n---\n\n");
+
+  // Write to .cursor/chat-history.txt
+  await sandbox.runCommand({
+    cmd: "bash",
+    args: [
+      "-c",
+      `mkdir -p .cursor && cat > .cursor/chat-history.txt << 'HISTORY_EOF'
+${escapeHeredoc(formattedHistory)}
+HISTORY_EOF`,
+    ],
+  });
 }
 
 export async function POST(
@@ -60,71 +170,216 @@ export async function POST(
     const userRequest = lastMessage?.content || "";
     const isFirstMessage = !currentContent || currentContent.trim() === "";
 
-    // Setup temp directory
-    const tempDir = await ensureTempDir(presentationId);
-    const presentationPath = join(tempDir, "presentation.md");
-    const samplePath = join(tempDir, "sample.md");
+    // Read reference files
+    const samplePath = join(process.cwd(), "public", "sample.md");
+    const rulesPath = join(process.cwd(), "public", "RULES.md");
+    const sampleContent = await readFile(samplePath, "utf-8");
+    const rulesContent = await readFile(rulesPath, "utf-8");
 
-    // Write current content to temp file
-    await writeFile(presentationPath, currentContent || "");
-
-    // Copy sample.md to temp directory as reference
-    const sourceSamplePath = join(process.cwd(), "public", "sample.md");
-    if (existsSync(sourceSamplePath)) {
-      await copyFile(sourceSamplePath, samplePath);
-    }
+    // Save user message to Redis
+    await saveChatMessage(presentationId, "user", userRequest);
 
     // Create streaming response
     const stream = new ReadableStream({
       async start(controller) {
+        let sandbox: Sandbox | null = null;
+        let isNewSandbox = false;
+
         try {
-          // Run Claude Agent SDK
-          // Note: ANTHROPIC_API_KEY env var is automatically picked up
-          const agentQuery = query({
-            prompt: buildAgentPrompt(userRequest, isFirstMessage),
-            options: {
-              continue: !isFirstMessage, // Continue conversation context
-              cwd: tempDir,
-              allowedTools: ["Edit", "Read", "Write"],
-              maxTurns: isFirstMessage ? 3 : 5,
+          // Get or create sandbox
+          sandbox = await getOrCreateSandbox(
+            presentationId,
+            controller,
+            encoder
+          );
+
+          // Check if this is a new sandbox (needs CLI installation)
+          const checkCLI = await sandbox.runCommand({
+            cmd: "which",
+            args: ["cursor-agent"],
+          });
+
+          isNewSandbox = checkCLI.exitCode !== 0;
+
+          if (isNewSandbox) {
+            // Install Cursor CLI using official installation script
+            controller.enqueue(
+              encoder.encode("[Installing Cursor CLI...]\n\n")
+            );
+
+            const installResult = await sandbox.runCommand({
+              cmd: "bash",
+              args: ["-c", "curl https://cursor.com/install -fsSL | bash"],
+            });
+
+            if (installResult.exitCode !== 0) {
+              const stderr = await installResult.stderr();
+              throw new Error(
+                `Failed to install Cursor CLI: ${stderr || "Unknown error"}`
+              );
+            }
+
+            controller.enqueue(encoder.encode("[Cursor CLI installed]\n\n"));
+          }
+
+          // Write reference files using heredoc
+          controller.enqueue(encoder.encode("[Setting up files...]\n\n"));
+
+          // Write RULES.md
+          await sandbox.runCommand({
+            cmd: "bash",
+            args: [
+              "-c",
+              `cat > RULES.md << 'RULES_EOF'
+${escapeHeredoc(rulesContent)}
+RULES_EOF`,
+            ],
+          });
+
+          // Write sample.md
+          await sandbox.runCommand({
+            cmd: "bash",
+            args: [
+              "-c",
+              `cat > sample.md << 'SAMPLE_EOF'
+${escapeHeredoc(sampleContent)}
+SAMPLE_EOF`,
+            ],
+          });
+
+          // Write current presentation content
+          await sandbox.runCommand({
+            cmd: "bash",
+            args: [
+              "-c",
+              `cat > presentation.md << 'PRES_EOF'
+${escapeHeredoc(currentContent || "")}
+PRES_EOF`,
+            ],
+          });
+
+          // Write chat history to sandbox
+          await writeChatHistoryToSandbox(sandbox, presentationId);
+
+          // Build the prompt
+          const promptContent = buildCursorPrompt(userRequest, isFirstMessage);
+
+          // Run Cursor Agent with streaming JSON output
+          controller.enqueue(encoder.encode("[Running AI agent...]\n\n"));
+
+          // Escape the prompt for shell
+          const escapedPrompt = promptContent
+            .replace(/\\/g, "\\\\")
+            .replace(/"/g, '\\"')
+            .replace(/\$/g, "\\$")
+            .replace(/`/g, "\\`");
+
+          const cursorResult = await sandbox.runCommand({
+            cmd: "cursor-agent",
+            args: [
+              "-p",
+              "--force",
+              "--output-format",
+              "stream-json",
+              "--stream-partial-output",
+              escapedPrompt,
+            ],
+            env: {
+              CURSOR_API_KEY: process.env.CURSOR_API_KEY || "",
             },
           });
 
-          // Stream agent messages
-          for await (const message of agentQuery) {
-            if (message.type === "assistant") {
-              // Stream agent thinking - extract text from message content
-              const content = message.message.content;
-              if (Array.isArray(content)) {
-                for (const block of content) {
-                  if (block.type === "text") {
-                    controller.enqueue(encoder.encode(block.text));
-                  } else if (block.type === "tool_use") {
-                    // Stream tool usage info
-                    const toolInfo = `\n[Using ${block.name}...]\n`;
-                    controller.enqueue(encoder.encode(toolInfo));
-                  }
-                }
-              }
-            } else if (message.type === "result") {
-              // Agent finished, read the final file
+          // Parse and stream Cursor output
+          const cursorStdout = await cursorResult.stdout();
+          let assistantResponse = "";
+
+          if (cursorStdout) {
+            // Parse JSON stream line by line
+            const lines = cursorStdout.split("\n").filter((l) => l.trim());
+
+            for (const line of lines) {
               try {
-                const finalContent = await readFile(presentationPath, "utf-8");
-                // Send a special marker followed by the content
-                controller.enqueue(encoder.encode("\n\n__FINAL_CONTENT__\n"));
-                controller.enqueue(encoder.encode(finalContent));
-              } catch (err) {
-                console.error("Error reading final content:", err);
-                controller.enqueue(
-                  encoder.encode("\n\nError reading presentation file.")
-                );
+                const event = JSON.parse(line);
+
+                if (event.type === "assistant") {
+                  // Stream assistant thinking
+                  const content = event.message?.content?.[0]?.text || "";
+                  assistantResponse += content;
+                  controller.enqueue(encoder.encode(content));
+                } else if (event.type === "tool_call") {
+                  // Show tool usage
+                  if (event.subtype === "started") {
+                    const toolMessage = (() => {
+                      if (event.tool_call?.writeToolCall) {
+                        const path =
+                          event.tool_call.writeToolCall.args?.path || "file";
+                        return `\n[Writing ${path}...]\n`;
+                      } else if (event.tool_call?.readToolCall) {
+                        const path =
+                          event.tool_call.readToolCall.args?.path || "file";
+                        return `\n[Reading ${path}...]\n`;
+                      } else if (event.tool_call?.editToolCall) {
+                        const path =
+                          event.tool_call.editToolCall.args?.path || "file";
+                        return `\n[Editing ${path}...]\n`;
+                      }
+                      return "";
+                    })();
+
+                    if (toolMessage) {
+                      assistantResponse += toolMessage;
+                      controller.enqueue(encoder.encode(toolMessage));
+                    }
+                  }
+                } else if (event.type === "result") {
+                  // Task completed
+                  const duration = event.duration_ms || 0;
+                  const completionMessage = `\n\n[Completed in ${duration}ms]\n`;
+                  assistantResponse += completionMessage;
+                  controller.enqueue(encoder.encode(completionMessage));
+                }
+              } catch (e) {
+                // Ignore malformed JSON lines
+                console.error("Failed to parse JSON line:", e);
               }
+            }
+
+            // Save assistant's response to Redis
+            if (assistantResponse) {
+              await saveChatMessage(
+                presentationId,
+                "assistant",
+                assistantResponse
+              );
             }
           }
 
+          if (cursorResult.exitCode !== 0) {
+            const stderr = await cursorResult.stderr();
+            throw new Error(`Cursor CLI failed: ${stderr || "Unknown error"}`);
+          }
+
+          // Read the final presentation.md
+          controller.enqueue(encoder.encode("\n\n[Reading result...]\n\n"));
+
+          const readResult = await sandbox.runCommand({
+            cmd: "cat",
+            args: ["presentation.md"],
+          });
+
+          if (readResult.exitCode !== 0) {
+            throw new Error("Failed to read presentation.md");
+          }
+
+          const finalContent = (await readResult.stdout()) || "";
+
+          // Send the final content marker
+          controller.enqueue(encoder.encode("__FINAL_CONTENT__\n"));
+          controller.enqueue(encoder.encode(finalContent));
+
           controller.close();
         } catch (error) {
-          console.error("Agent error:", error);
+          console.error("Sandbox error:", error);
           controller.enqueue(
             encoder.encode(
               `\n\nError: ${
@@ -134,6 +389,8 @@ export async function POST(
           );
           controller.close();
         }
+        // Note: We don't stop the sandbox - it will be reused for future requests
+        // Sandbox will auto-expire after 15 minutes of inactivity
       },
     });
 

@@ -63,14 +63,14 @@ export default function Home() {
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
               placeholder="e.g. The future of renewable energy"
-              className="w-full px-6 py-4 text-lg border border-gray-300 rounded-lg focus:outline-none focus:border-black"
+              className="w-full px-6 py-4 text-lg border border-gray-300 dark:border-gray-800 bg-white dark:bg-black rounded-lg focus:outline-none focus:border-black dark:focus:border-white"
               disabled={isCreating}
               autoFocus
             />
             <button
               type="submit"
               disabled={!prompt.trim() || isCreating}
-              className="w-full px-6 py-4 bg-black text-white rounded-lg hover:bg-gray-800 disabled:bg-gray-300 disabled:cursor-not-allowed text-lg font-medium"
+              className="w-full px-6 py-4 bg-black dark:bg-white text-white dark:text-black rounded-lg hover:bg-gray-800 dark:hover:bg-gray-200 disabled:bg-gray-300 dark:disabled:bg-gray-800 disabled:text-gray-500 dark:disabled:text-gray-500 disabled:cursor-not-allowed text-lg font-medium"
             >
               {isCreating ? "Creating..." : "Create with AI"}
             </button>
@@ -78,17 +78,19 @@ export default function Home() {
 
           <div className="relative my-8">
             <div className="absolute inset-0 flex items-center">
-              <div className="w-full border-t border-gray-300"></div>
+              <div className="w-full border-t border-gray-300 dark:border-gray-800"></div>
             </div>
             <div className="relative flex justify-center text-sm">
-              <span className="px-4 bg-white text-gray-500">OR</span>
+              <span className="px-4 bg-white dark:bg-black text-gray-500 dark:text-gray-400">
+                OR
+              </span>
             </div>
           </div>
 
           <button
             onClick={handleBlankClick}
             disabled={isCreating}
-            className="w-full px-6 py-4 border-2 border-gray-300 text-gray-700 rounded-lg hover:border-black hover:text-black disabled:bg-gray-100 disabled:cursor-not-allowed text-lg font-medium"
+            className="w-full px-6 py-4 border-2 border-gray-300 dark:border-gray-800 text-gray-700 dark:text-gray-300 rounded-lg hover:border-black dark:hover:border-white hover:text-black dark:hover:text-white disabled:bg-gray-100 dark:disabled:bg-black disabled:border-gray-200 dark:disabled:border-gray-900 disabled:text-gray-400 dark:disabled:text-gray-600 disabled:cursor-not-allowed text-lg font-medium"
           >
             Start blank
           </button>
