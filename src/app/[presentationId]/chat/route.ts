@@ -64,34 +64,35 @@ async function getOrCreateSandbox(
   presentationId: string,
   controller: ReadableStreamDefaultController,
   encoder: TextEncoder
-): Promise<Sandbox> {
+): Promise<{ sandbox: Sandbox; reusingSandbox: boolean }> {
   // Check if sandbox exists
   const existingSandboxId = await redis.get<string>(
     SANDBOX_KEY(presentationId)
   );
 
-  // TODO: Implement sandbox reuse when Sandbox.get() API is available
-  // For now, we create a new sandbox each time but skip CLI installation
-  // if we detect it was recently created
-  const isReusingSandbox = !!existingSandboxId;
-
-  // Create new sandbox
-  if (!isReusingSandbox) {
-    controller.enqueue(encoder.encode("[Creating secure environment...]\n\n"));
+  let sandbox: Sandbox | null = null;
+  let reusingSandbox = false;
+  if (existingSandboxId) {
+    try {
+      sandbox = await Sandbox.get({ sandboxId: existingSandboxId });
+      reusingSandbox = true;
+    } catch {
+      // noop
+    }
   }
 
-  const sandbox = await Sandbox.create({
-    resources: { vcpus: 2 },
-    timeout: ms("15m"),
-    runtime: "node22",
-  });
+  if (!sandbox) {
+    controller.enqueue(encoder.encode("[Creating secure environment...]\n\n"));
+    sandbox = await Sandbox.create({
+      resources: { vcpus: 2 },
+      timeout: ms("15m"),
+      runtime: "node22",
+    });
+  }
 
-  // Store sandbox reference in Redis with TTL (14 minutes, before sandbox timeout)
-  // Note: Storing the sandbox object itself for now
-  // TODO: Check if sandboxes have a retrievable ID
-  await redis.setex(SANDBOX_KEY(presentationId), 840, "created");
+  await redis.setex(SANDBOX_KEY(presentationId), 840, sandbox.sandboxId);
 
-  return sandbox;
+  return { sandbox, reusingSandbox };
 }
 
 // Save chat message to Redis
@@ -189,19 +190,13 @@ export async function POST(
 
         try {
           // Get or create sandbox
-          sandbox = await getOrCreateSandbox(
+          const result = await getOrCreateSandbox(
             presentationId,
             controller,
             encoder
           );
-
-          // Check if this is a new sandbox (needs CLI installation)
-          const checkCLI = await sandbox.runCommand({
-            cmd: "which",
-            args: ["cursor-agent"],
-          });
-
-          isNewSandbox = checkCLI.exitCode !== 0;
+          sandbox = result.sandbox;
+          isNewSandbox = !result.reusingSandbox;
 
           if (isNewSandbox) {
             // Install Cursor CLI using official installation script
