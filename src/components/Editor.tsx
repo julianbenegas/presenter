@@ -1,17 +1,37 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { EditorView, keymap } from "@codemirror/view";
+import {
+  EditorView,
+  keymap,
+  lineNumbers,
+  highlightActiveLineGutter,
+  highlightSpecialChars,
+  drawSelection,
+  dropCursor,
+  rectangularSelection,
+  crosshairCursor,
+  highlightActiveLine,
+} from "@codemirror/view";
 import { EditorState } from "@codemirror/state";
-import { basicSetup } from "codemirror";
+import {
+  history,
+  defaultKeymap,
+  historyKeymap,
+  indentWithTab,
+} from "@codemirror/commands";
 import { markdown } from "@codemirror/lang-markdown";
-import { defaultKeymap, indentWithTab } from "@codemirror/commands";
 import {
   syntaxHighlighting,
   indentUnit,
   HighlightStyle,
+  bracketMatching,
+  foldGutter,
+  foldKeymap,
+  indentOnInput,
+  defaultHighlightStyle,
 } from "@codemirror/language";
-import { tags } from "@lezer/highlight";
+import { tags, classHighlighter } from "@lezer/highlight";
 
 interface EditorProps {
   value: string;
@@ -47,18 +67,12 @@ export function Editor({
 
     // Custom markdown highlighting for better visibility
     const markdownHighlighting = HighlightStyle.define([
-      {
-        tag: tags.heading1,
-        class: "cm-heading-1",
-      },
-      {
-        tag: tags.heading2,
-        class: "cm-heading-2",
-      },
-      {
-        tag: tags.heading3,
-        class: "cm-heading-3",
-      },
+      { tag: tags.heading1, class: "cm-heading-1" },
+      { tag: tags.heading2, class: "cm-heading-2" },
+      { tag: tags.heading3, class: "cm-heading-3" },
+      { tag: tags.heading4, class: "cm-heading-4" },
+      { tag: tags.heading5, class: "cm-heading-5" },
+      { tag: tags.heading6, class: "cm-heading-6" },
       { tag: tags.heading, class: "cm-heading" },
       { tag: tags.emphasis, class: "cm-emphasis" },
       { tag: tags.strong, class: "cm-strong" },
@@ -68,6 +82,47 @@ export function Editor({
       { tag: tags.quote, class: "cm-quote" },
       { tag: tags.strikethrough, class: "cm-strikethrough" },
       { tag: tags.url, class: "cm-url" },
+      { tag: tags.meta, class: "cm-meta" },
+      { tag: tags.comment, class: "cm-comment" },
+      { tag: tags.atom, class: "cm-atom" },
+      { tag: tags.bool, class: "cm-bool" },
+      { tag: tags.labelName, class: "cm-labelName" },
+      { tag: tags.inserted, class: "cm-inserted" },
+      { tag: tags.deleted, class: "cm-deleted" },
+      { tag: tags.literal, class: "cm-literal" },
+      { tag: tags.string, class: "cm-string" },
+      { tag: tags.number, class: "cm-number" },
+      {
+        tag: [tags.regexp, tags.escape, tags.special(tags.string)],
+        class: "cm-string2",
+      },
+      { tag: tags.variableName, class: "cm-variableName" },
+      { tag: tags.local(tags.variableName), class: "cm-variableName cm-local" },
+      {
+        tag: tags.definition(tags.variableName),
+        class: "cm-variableName cm-definition",
+      },
+      {
+        tag: tags.special(tags.variableName),
+        class: "cm-variableName cm-special",
+      },
+      {
+        tag: tags.definition(tags.propertyName),
+        class: "cm-propertyName cm-definition",
+      },
+      { tag: tags.typeName, class: "cm-typeName" },
+      { tag: tags.namespace, class: "cm-namespace" },
+      { tag: tags.className, class: "cm-className" },
+      { tag: tags.macroName, class: "cm-macroName" },
+      { tag: tags.propertyName, class: "cm-propertyName" },
+      { tag: tags.operator, class: "cm-operator" },
+      { tag: tags.keyword, class: "cm-keyword" },
+      { tag: tags.name, class: "cm-name" },
+      { tag: tags.processingInstruction, class: "cm-processingInstruction" },
+      { tag: tags.separator, class: "cm-separator" },
+      { tag: tags.punctuation, class: "cm-punctuation" },
+      { tag: tags.bracket, class: "cm-bracket" },
+      { tag: tags.invalid, class: "cm-invalid" },
     ]);
 
     // Handle paste events for images and videos
@@ -134,10 +189,36 @@ export function Editor({
     const startState = EditorState.create({
       doc: value,
       extensions: [
-        basicSetup,
+        // Basic editor features
+        lineNumbers(),
+        highlightActiveLineGutter(),
+        highlightSpecialChars(),
+        history(),
+        foldGutter(),
+        drawSelection(),
+        dropCursor(),
+        EditorState.allowMultipleSelections.of(true),
+        indentOnInput(),
+        bracketMatching(),
+        rectangularSelection(),
+        crosshairCursor(),
+        highlightActiveLine(),
+
+        // Language and syntax highlighting - order matters!
         markdown(),
-        syntaxHighlighting(markdownHighlighting, { fallback: false }),
-        keymap.of([...defaultKeymap, indentWithTab]),
+        syntaxHighlighting(classHighlighter),
+        syntaxHighlighting(markdownHighlighting),
+        syntaxHighlighting(defaultHighlightStyle),
+
+        // Keymaps
+        keymap.of([
+          ...defaultKeymap,
+          ...historyKeymap,
+          ...foldKeymap,
+          indentWithTab,
+        ]),
+
+        // Custom settings
         EditorView.updateListener.of((update) => {
           if (update.docChanged) {
             // Skip onChange on initial mount

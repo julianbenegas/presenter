@@ -350,7 +350,7 @@ export default function PresentationPage({
         <div className="border-b border-gray-200 dark:border-gray-800 p-4 flex items-center justify-between">
           {viewMode === "present" ? (
             <>
-              <div className="text-sm text-gray-600 dark:text-gray-400 dark:text-gray-600">
+              <div className="text-sm text-gray-600 dark:text-gray-600">
                 Slide {currentSlideIndex + 1} of {slides.length}
               </div>
               <button
@@ -435,7 +435,7 @@ export default function PresentationPage({
                 >
                   Previous
                 </button>
-                <span className="text-sm text-gray-600 dark:text-gray-400 dark:text-gray-600">
+                <span className="text-sm text-gray-600 dark:text-gray-600">
                   {currentSlideIndex + 1} / {slides.length}
                 </span>
                 <button

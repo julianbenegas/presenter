@@ -83,8 +83,8 @@ async function getOrCreateSandbox(
   controller.enqueue(encoder.encode("[Creating secure environment...]\n\n"));
 
   const sandbox = await Sandbox.create({
-    resources: { vcpus: 1 },
-    timeout: ms("15m"), // Longer timeout for reuse
+    resources: { vcpus: 2 },
+    timeout: ms("15m"),
     runtime: "node22",
   });
 
