@@ -95,9 +95,6 @@ export default function PresentationPage({
   // Auto-save content
   const handleContentChange = useCallback(
     (newContent: string) => {
-      // Only save if content actually changed
-      if (newContent === content) return;
-
       setContent(newContent);
       savePresentation({
         id: presentationId,
@@ -107,7 +104,7 @@ export default function PresentationPage({
       });
       window.dispatchEvent(new Event("presentations-updated"));
     },
-    [presentationId, content]
+    [presentationId]
   );
 
   // Handle chat messages
@@ -415,7 +412,7 @@ export default function PresentationPage({
             <div className="flex-1 flex flex-col">
               {/* Slide display */}
               <div className="flex-1 flex items-center justify-center p-8 bg-gray-50 dark:bg-gray-900">
-                <div className="w-full max-w-4xl aspect-video border border-gray-200 dark:border-gray-800 rounded-lg bg-white dark:bg-black p-12 flex items-center justify-center">
+                <div className="w-full max-w-4xl aspect-video border border-gray-200 dark:border-gray-800 rounded-lg bg-white dark:bg-black p-12 flex items-center justify-center overflow-auto">
                   {currentSlideVisible ? (
                     <SlideView content={currentSlideVisible} />
                   ) : (

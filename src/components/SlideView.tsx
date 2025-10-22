@@ -211,10 +211,18 @@ export function SlideView({ content, className = "" }: SlideViewProps) {
             );
           },
           img: ({ src, alt }) => (
-            <img src={src} alt={alt || ""} className="max-w-full h-auto" />
+            <img
+              src={src}
+              alt={alt || ""}
+              className="max-w-full max-h-[70vh] h-auto object-contain"
+            />
           ),
           video: ({ src }) => (
-            <video src={src} controls className="max-w-full h-auto" />
+            <video
+              src={src}
+              controls
+              className="max-w-full max-h-[70vh] h-auto"
+            />
           ),
         }}
       >

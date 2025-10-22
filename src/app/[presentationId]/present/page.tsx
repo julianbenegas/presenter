@@ -117,7 +117,7 @@ export default function PresentPage({
       ref={containerRef}
       className="h-screen w-screen flex items-center justify-center bg-white overflow-hidden"
     >
-      <div className="w-full h-full flex items-center justify-center">
+      <div className="w-full h-full flex items-center justify-center p-8 overflow-auto">
         {visible ? (
           <SlideView content={visible} />
         ) : (

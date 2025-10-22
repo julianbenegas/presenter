@@ -73,14 +73,12 @@ async function getOrCreateSandbox(
   // TODO: Implement sandbox reuse when Sandbox.get() API is available
   // For now, we create a new sandbox each time but skip CLI installation
   // if we detect it was recently created
-  if (existingSandboxId) {
-    controller.enqueue(
-      encoder.encode("[Using recently initialized environment...]\n\n")
-    );
-  }
+  const isReusingSandbox = !!existingSandboxId;
 
   // Create new sandbox
-  controller.enqueue(encoder.encode("[Creating secure environment...]\n\n"));
+  if (!isReusingSandbox) {
+    controller.enqueue(encoder.encode("[Creating secure environment...]\n\n"));
+  }
 
   const sandbox = await Sandbox.create({
     resources: { vcpus: 2 },
@@ -109,7 +107,7 @@ async function saveChatMessage(
   };
 
   // Append to chat history (keep last 50 messages)
-  await redis.rpush(CHAT_HISTORY_KEY(presentationId), JSON.stringify(message));
+  await redis.rpush(CHAT_HISTORY_KEY(presentationId), message);
   await redis.ltrim(CHAT_HISTORY_KEY(presentationId), -50, -1);
 
   // Set TTL on chat history (1 hour)
@@ -120,8 +118,12 @@ async function saveChatMessage(
 async function getChatHistory(
   presentationId: string
 ): Promise<Array<{ role: string; content: string; timestamp: number }>> {
-  const history = await redis.lrange(CHAT_HISTORY_KEY(presentationId), 0, -1);
-  return history.map((msg) => JSON.parse(msg));
+  const history = await redis.lrange<{
+    role: string;
+    content: string;
+    timestamp: number;
+  }>(CHAT_HISTORY_KEY(presentationId), 0, -1);
+  return history;
 }
 
 // Write chat history to sandbox for Cursor agent
@@ -220,10 +222,10 @@ export async function POST(
             }
 
             controller.enqueue(encoder.encode("[Cursor CLI installed]\n\n"));
-          }
 
-          // Write reference files using heredoc
-          controller.enqueue(encoder.encode("[Setting up files...]\n\n"));
+            // Write reference files using heredoc
+            controller.enqueue(encoder.encode("[Setting up files...]\n\n"));
+          }
 
           // Write RULES.md
           await sandbox.runCommand({
@@ -265,7 +267,6 @@ PRES_EOF`,
           const promptContent = buildCursorPrompt(userRequest, isFirstMessage);
 
           // Run Cursor Agent with streaming JSON output
-          controller.enqueue(encoder.encode("[Running AI agent...]\n\n"));
 
           // Escape the prompt for shell
           const escapedPrompt = promptContent
@@ -360,8 +361,6 @@ PRES_EOF`,
           }
 
           // Read the final presentation.md
-          controller.enqueue(encoder.encode("\n\n[Reading result...]\n\n"));
-
           const readResult = await sandbox.runCommand({
             cmd: "cat",
             args: ["presentation.md"],
