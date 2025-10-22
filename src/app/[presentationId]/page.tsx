@@ -45,6 +45,7 @@ export default function PresentationPage({
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [notesHeight, setNotesHeight] = useState(DEFAULT_NOTES_HEIGHT);
+  const [isProcessingLLMResponse, setIsProcessingLLMResponse] = useState(false);
 
   // Load saved notes height
   useEffect(() => {
@@ -96,15 +97,18 @@ export default function PresentationPage({
   const handleContentChange = useCallback(
     (newContent: string) => {
       setContent(newContent);
-      savePresentation({
-        id: presentationId,
-        title: "Presentation",
-        content: newContent,
-        updatedAt: Date.now(), // Only updates when content changes
-      });
-      window.dispatchEvent(new Event("presentations-updated"));
+      // Don't save if we're processing an LLM response to avoid race conditions
+      if (!isProcessingLLMResponse) {
+        savePresentation({
+          id: presentationId,
+          title: "Presentation",
+          content: newContent,
+          updatedAt: Date.now(), // Only updates when content changes
+        });
+        window.dispatchEvent(new Event("presentations-updated"));
+      }
     },
-    [presentationId]
+    [presentationId, isProcessingLLMResponse]
   );
 
   // Handle chat messages
@@ -118,6 +122,7 @@ export default function PresentationPage({
       const updatedMessages = [...messages, userMessage];
       setMessages(updatedMessages);
       setIsLoading(true);
+      setIsProcessingLLMResponse(true);
 
       // Save user message
       saveChat({
@@ -163,8 +168,13 @@ export default function PresentationPage({
             agentThinking = parts[0];
             const finalContent = parts[1] || "";
 
+            console.log("finalContent", finalContent);
+
             // Update presentation with final content
+            // Use the functional form to ensure we have the latest state
             setContent(finalContent);
+
+            // Save to localStorage immediately
             savePresentation({
               id: presentationId,
               title: "Presentation",
@@ -187,6 +197,9 @@ export default function PresentationPage({
             });
 
             window.dispatchEvent(new Event("presentations-updated"));
+
+            // Clear the processing flag to allow editor saves again
+            setIsProcessingLLMResponse(false);
             break;
           } else {
             // Update streaming message in real-time
@@ -198,6 +211,7 @@ export default function PresentationPage({
         console.error("Error sending message:", error);
       } finally {
         setIsLoading(false);
+        setIsProcessingLLMResponse(false);
       }
     },
     [content, presentationId, messages]
@@ -307,18 +321,20 @@ export default function PresentationPage({
             finalMarkdown
           );
 
-          // Save updated content
-          savePresentation({
-            id: presentationId,
-            title: extractTitle(newContent),
-            content: newContent,
-            updatedAt: Date.now(),
-          });
+          // Save updated content (skip if LLM is processing to avoid race conditions)
+          if (!isProcessingLLMResponse) {
+            savePresentation({
+              id: presentationId,
+              title: extractTitle(newContent),
+              content: newContent,
+              updatedAt: Date.now(),
+            });
 
-          // Defer event dispatch to avoid updating during render
-          setTimeout(() => {
-            window.dispatchEvent(new Event("presentations-updated"));
-          }, 0);
+            // Defer event dispatch to avoid updating during render
+            setTimeout(() => {
+              window.dispatchEvent(new Event("presentations-updated"));
+            }, 0);
+          }
 
           return newContent;
         });
@@ -335,7 +351,7 @@ export default function PresentationPage({
         );
       }
     },
-    [presentationId]
+    [presentationId, isProcessingLLMResponse]
   );
 
   return (
