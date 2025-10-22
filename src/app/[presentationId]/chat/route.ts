@@ -27,11 +27,11 @@ See sample.md for a real example of proper formatting.
 Create 5-10 well-structured slides and save the result to presentation.md.`;
   }
 
-  return `Edit the presentation based on this user request:
+  return `The user is working on their presentation and sent you a message:
 
-<user_request>
+<user_message>
 ${userRequest}
-</user_request>
+</user_message>
 
 <current_presentation>
 Read presentation.md for the current content.
@@ -45,7 +45,7 @@ Read RULES.md for formatting rules.
 See sample.md for examples.
 </reference>
 
-Make surgical edits - don't regenerate unless asked. Save the updated result to presentation.md.`;
+You can edit the presentation.md file to make changes, if the user asks you to do so.`;
 }
 
 // Helper to escape content for heredoc
@@ -259,6 +259,11 @@ ${escapeHeredoc(currentContent || "")}
 PRES_EOF`,
             ],
           });
+
+          if (isNewSandbox) {
+            controller.enqueue(encoder.encode("[Files setup complete...]\n\n"));
+            controller.enqueue(encoder.encode("[Running AI agent...]\n\n"));
+          }
 
           // Write chat history to sandbox
           await writeChatHistoryToSandbox(sandbox, presentationId);

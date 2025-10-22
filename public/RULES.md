@@ -48,3 +48,7 @@ More presenter notes here.
     Another audience-visible line.
     Multiple indented lines appear together.
 ```
+
+## Code Blocks
+
+You can use code blocks by fencing them, like you would in regular markdown.
