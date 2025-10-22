@@ -106,7 +106,6 @@ export async function POST(
     // Get the latest user message
     const lastMessage = messages[messages.length - 1];
     const userRequest = lastMessage?.content || "";
-    const isFirstMessage = !currentContent || currentContent.trim() === "";
 
     // Read reference files
     const samplePath = join(process.cwd(), "public", "sample.md");
@@ -116,6 +115,10 @@ export async function POST(
 
     // Get existing thread ID (if any) for resumable conversation
     const existingThreadId = await getThreadId(presentationId);
+
+    // Determine if this is the first message by checking if a Cursor CLI session exists
+    // If there's no existing thread ID, it means this is the first message
+    const isFirstMessage = !existingThreadId;
 
     // Create streaming response
     const stream = new ReadableStream({
