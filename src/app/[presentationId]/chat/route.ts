@@ -27,25 +27,9 @@ See sample.md for a real example of proper formatting.
 Create 5-10 well-structured slides and save the result to presentation.md.`;
   }
 
-  return `The user is working on their presentation and sent you a message:
-
-<user_message>
-${userRequest}
-</user_message>
-
-<current_presentation>
-Read presentation.md for the current content.
-</current_presentation>
-
-<rules>
-Read RULES.md for formatting rules.
-</rules>
-
-<reference>
-See sample.md for examples.
-</reference>
-
-You can edit the presentation.md file to make changes, if the user asks you to do so.`;
+  // For resumable conversations, just send the user's message directly
+  // Cursor already has all the context from the previous conversation
+  return userRequest;
 }
 
 // Helper to escape content for heredoc
@@ -56,8 +40,8 @@ function escapeHeredoc(content: string): string {
 
 // Redis keys
 const SANDBOX_KEY = (presentationId: string) => `sandbox:${presentationId}:id`;
-const CHAT_HISTORY_KEY = (presentationId: string) =>
-  `chat:${presentationId}:history`;
+const THREAD_ID_KEY = (presentationId: string) =>
+  `cursor:${presentationId}:thread_id`;
 
 // Get or create sandbox for presentation
 async function getOrCreateSandbox(
@@ -95,67 +79,18 @@ async function getOrCreateSandbox(
   return { sandbox, reusingSandbox };
 }
 
-// Save chat message to Redis
-async function saveChatMessage(
+// Get Cursor agent thread ID from Redis
+async function getThreadId(presentationId: string): Promise<string | null> {
+  return await redis.get<string>(THREAD_ID_KEY(presentationId));
+}
+
+// Save Cursor agent thread ID to Redis
+async function saveThreadId(
   presentationId: string,
-  role: "user" | "assistant",
-  content: string
-) {
-  const message = {
-    role,
-    content,
-    timestamp: Date.now(),
-  };
-
-  // Append to chat history (keep last 50 messages)
-  await redis.rpush(CHAT_HISTORY_KEY(presentationId), message);
-  await redis.ltrim(CHAT_HISTORY_KEY(presentationId), -50, -1);
-
-  // Set TTL on chat history (1 hour)
-  await redis.expire(CHAT_HISTORY_KEY(presentationId), 3600);
-}
-
-// Get chat history from Redis
-async function getChatHistory(
-  presentationId: string
-): Promise<Array<{ role: string; content: string; timestamp: number }>> {
-  const history = await redis.lrange<{
-    role: string;
-    content: string;
-    timestamp: number;
-  }>(CHAT_HISTORY_KEY(presentationId), 0, -1);
-  return history;
-}
-
-// Write chat history to sandbox for Cursor agent
-async function writeChatHistoryToSandbox(
-  sandbox: Sandbox,
-  presentationId: string
-) {
-  const history = await getChatHistory(presentationId);
-
-  if (history.length === 0) {
-    return;
-  }
-
-  // Format chat history for Cursor
-  const formattedHistory = history
-    .map((msg) => {
-      const timestamp = new Date(msg.timestamp).toISOString();
-      return `[${timestamp}] ${msg.role.toUpperCase()}:\n${msg.content}\n`;
-    })
-    .join("\n---\n\n");
-
-  // Write to .cursor/chat-history.txt
-  await sandbox.runCommand({
-    cmd: "bash",
-    args: [
-      "-c",
-      `mkdir -p .cursor && cat > .cursor/chat-history.txt << 'HISTORY_EOF'
-${escapeHeredoc(formattedHistory)}
-HISTORY_EOF`,
-    ],
-  });
+  threadId: string
+): Promise<void> {
+  // Set TTL of 1 hour to match sandbox lifetime
+  await redis.setex(THREAD_ID_KEY(presentationId), 3600, threadId);
 }
 
 export async function POST(
@@ -179,8 +114,8 @@ export async function POST(
     const sampleContent = await readFile(samplePath, "utf-8");
     const rulesContent = await readFile(rulesPath, "utf-8");
 
-    // Save user message to Redis
-    await saveChatMessage(presentationId, "user", userRequest);
+    // Get existing thread ID (if any) for resumable conversation
+    const existingThreadId = await getThreadId(presentationId);
 
     // Create streaming response
     const stream = new ReadableStream({
@@ -260,13 +195,11 @@ PRES_EOF`,
             controller.enqueue(encoder.encode("[Running AI agent...]\n\n"));
           }
 
-          // Write chat history to sandbox
-          await writeChatHistoryToSandbox(sandbox, presentationId);
-
           // Build the prompt
           const promptContent = buildCursorPrompt(userRequest, isFirstMessage);
 
           // Run Cursor Agent with streaming JSON output
+          // Use --resume if we have an existing thread, otherwise start fresh
 
           // Escape the prompt for shell
           const escapedPrompt = promptContent
@@ -275,16 +208,24 @@ PRES_EOF`,
             .replace(/\$/g, "\\$")
             .replace(/`/g, "\\`");
 
+          const cursorArgs = [
+            "-p",
+            "--force",
+            "--output-format",
+            "stream-json",
+            "--stream-partial-output",
+          ];
+
+          // Add --resume flag if we have an existing thread ID
+          if (existingThreadId) {
+            cursorArgs.push("--resume", existingThreadId);
+          }
+
+          cursorArgs.push(escapedPrompt);
+
           const cursorResult = await sandbox.runCommand({
             cmd: "cursor-agent",
-            args: [
-              "-p",
-              "--force",
-              "--output-format",
-              "stream-json",
-              "--stream-partial-output",
-              escapedPrompt,
-            ],
+            args: cursorArgs,
             env: {
               CURSOR_API_KEY: process.env.CURSOR_API_KEY || "",
             },
@@ -293,6 +234,7 @@ PRES_EOF`,
           // Parse and stream Cursor output
           const cursorStdout = await cursorResult.stdout();
           let assistantResponse = "";
+          let sessionId: string | null = null;
 
           if (cursorStdout) {
             // Parse JSON stream line by line
@@ -333,11 +275,16 @@ PRES_EOF`,
                     }
                   }
                 } else if (event.type === "result") {
-                  // Task completed
+                  // Task completed - extract session ID for resumable conversations
                   const duration = event.duration_ms || 0;
                   const completionMessage = `\n\n[Completed in ${duration}ms]\n`;
                   assistantResponse += completionMessage;
                   controller.enqueue(encoder.encode(completionMessage));
+
+                  // Capture session ID if present (used for --resume)
+                  if (event.session_id) {
+                    sessionId = event.session_id;
+                  }
                 }
               } catch (e) {
                 // Ignore malformed JSON lines
@@ -345,13 +292,9 @@ PRES_EOF`,
               }
             }
 
-            // Save assistant's response to Redis
-            if (assistantResponse) {
-              await saveChatMessage(
-                presentationId,
-                "assistant",
-                assistantResponse
-              );
+            // Save session ID to Redis for future resumption
+            if (sessionId) {
+              await saveThreadId(presentationId, sessionId);
             }
           }
 
@@ -373,7 +316,7 @@ PRES_EOF`,
           const finalContent = (await readResult.stdout()) || "";
 
           // Send the final content marker
-          controller.enqueue(encoder.encode("__FINAL_CONTENT__\n"));
+          controller.enqueue(encoder.encode("__FINAL_CONTENT__"));
           controller.enqueue(encoder.encode(finalContent));
 
           controller.close();
